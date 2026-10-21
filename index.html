@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Tools All Scanner</title>
+  
+  <!-- PWA & Mobile Meta Tags -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0284c7">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  
+  <!-- Styling -->
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- External Libraries (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.min.js" async onload="onOpenCvReady()"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
+</head>
+<body>
+
+  <!-- Header / Navigation Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <i class="fa-solid fa-file-contract brand-icon"></i>
+      <h1>Tools All Scanner</h1>
+    </div>
+    <div class="status-badge" id="cvStatus">
+      <i class="fa-solid fa-spinner fa-spin"></i> Memuat Engine...
+    </div>
+  </header>
+
+  <main class="app-container">
+    <!-- Camera Viewport & Capture Section -->
+    <section class="camera-card">
+      <div class="viewport-wrapper" id="viewportWrapper">
+        <video id="videoFeed" autoplay playsinline muted></video>
+        <canvas id="overlayCanvas"></canvas>
+        
+        <!-- Live Document Detection Box -->
+        <div class="detection-guide" id="detectionGuide">
+          <div class="guide-text">Arahkan Dokumen ke Kamera</div>
+        </div>
+
+        <!-- Timer / Auto Capture Indicator -->
+        <div class="auto-capture-status hidden" id="autoCaptureStatus">
+          <span id="captureTimer">3</span> detik...
+        </div>
+      </div>
+
+      <!-- Camera Control Bar -->
+      <div class="controls-bar">
+        <button id="toggleCameraBtn" class="btn btn-secondary">
+          <i class="fa-solid fa-camera-rotate"></i> Ganti Kamera
+        </button>
+        <button id="captureBtn" class="btn btn-primary btn-large" disabled>
+          <i class="fa-solid fa-circle-dot"></i> Ambil Foto
+        </button>
+        <label for="fileInput" class="btn btn-secondary">
+          <i class="fa-solid fa-upload"></i> Unggah Gambar
+          <input type="file" id="fileInput" accept="image/*" class="hidden">
+        </label>
+      </div>
+    </section>
+
+    <!-- Editor & Fine-Tuning Section -->
+    <section class="editor-card hidden" id="editorCard">
+      <div class="card-header">
+        <h2><i class="fa-solid fa-sliders"></i> Pengolahan Dokumen</h2>
+        <div class="editor-actions">
+          <button id="rotateBtn" class="btn btn-icon" title="Putar Gambar"><i class="fa-solid fa-rotate-right"></i></button>
+          <button id="resetFilterBtn" class="btn btn-icon" title="Reset Filter"><i class="fa-solid fa-arrow-rotate-left"></i></button>
+        </div>
+      </div>
+
+      <div class="editor-body">
+        <!-- Main Canvas Preview -->
+        <div class="canvas-preview-container">
+          <canvas id="editorCanvas"></canvas>
+        </div>
+
+        <!-- Filter Presets -->
+        <div class="filter-options">
+          <label class="filter-chip active" data-filter="magic">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Magic Color
+          </label>
+          <label class="filter-chip" data-filter="bw">
+            <i class="fa-solid fa-file-lines"></i> Hitam-Putih
+          </label>
+          <label class="filter-chip" data-filter="adaptive">
+            <i class="fa-solid fa-sun-plant-wilt"></i> Hapus Bayangan
+          </label>
+          <label class="filter-chip" data-filter="gray">
+            <i class="fa-solid fa-circle-half-stroke"></i> Skala Abu
+          </label>
+          <label class="filter-chip" data-filter="original">
+            <i class="fa-solid fa-image"></i> Asli
+          </label>
+        </div>
+
+        <!-- Fine-tuning Adjustments -->
+        <div class="adjustments-panel">
+          <div class="slider-group">
+            <label><i class="fa-solid fa-sun"></i> Kecerahan</label>
+            <input type="range" id="brightnessSlider" min="-100" max="100" value="0">
+          </div>
+          <div class="slider-group">
+            <label><i class="fa-solid fa-circle-half-stroke"></i> Kontras</label>
+            <input type="range" id="contrastSlider" min="-100" max="100" value="0">
+          </div>
+        </div>
+
+        <!-- Watermark Settings -->
+        <div class="watermark-panel">
+          <div class="input-group">
+            <label for="watermarkText"><i class="fa-solid fa-stamp"></i> Watermark Teks</label>
+            <div class="input-with-select">
+              <input type="text" id="watermarkText" placeholder="Contoh: RAHASIA / CONFIDENTIAL">
+              <select id="watermarkPreset">
+                <option value="">-- Pilih Preset --</option>
+                <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+                <option value="SANGAT RAHASIA">SANGAT RAHASIA</option>
+                <option value="APPROVED">APPROVED</option>
+                <option value="DRAFT">DRAFT</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI OCR Text Extraction -->
+        <div class="ocr-section">
+          <div class="ocr-header">
+            <h3><i class="fa-solid fa-brain"></i> AI OCR Extractor</h3>
+            <button id="runOcrBtn" class="btn btn-small btn-secondary">
+              <i class="fa-solid fa-font"></i> Ekstrak Teks
+            </button>
+          </div>
+          <div class="ocr-result hidden" id="ocrResultBox">
+            <textarea id="ocrOutput" readonly placeholder="Hasil pemindaian teks akan muncul di sini..."></textarea>
+            <button id="copyOcrBtn" class="btn btn-small btn-primary">
+              <i class="fa-solid fa-copy"></i> Salin Teks
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-footer">
+          <button id="addPageBtn" class="btn btn-success">
+            <i class="fa-solid fa-plus"></i> Tambah Halaman Ini
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Queue & Export Manager -->
+    <section class="queue-card" id="queueCard">
+      <div class="card-header">
+        <h2><i class="fa-solid fa-layer-group"></i> Daftar Halaman Dokumen (<span id="pageCount">0</span>)</h2>
+        <button id="clearQueueBtn" class="btn btn-danger btn-small">
+          <i class="fa-solid fa-trash"></i> Hapus Semua
+        </button>
+      </div>
+
+      <div class="queue-thumbnails" id="queueThumbnails">
+        <div class="empty-state">Belum ada halaman yang ditambahkan.</div>
+      </div>
+
+      <div class="export-panel">
+        <h3><i class="fa-solid fa-download"></i> Opsi Ekspor Dokumen</h3>
+        <div class="export-buttons">
+          <button id="exportPdfBtn" class="btn btn-export">
+            <i class="fa-solid fa-file-pdf"></i> Ekspor PDF
+          </button>
+          <button id="exportDocxBtn" class="btn btn-export">
+            <i class="fa-solid fa-file-word"></i> Ekspor Word (.docx)
+          </button>
+          <button id="exportTxtBtn" class="btn btn-export">
+            <i class="fa-solid fa-file-lines"></i> Ekspor Teks (.txt)
+          </button>
+          <button id="exportZipBtn" class="btn btn-export">
+            <i class="fa-solid fa-file-zipper"></i> Ekspor Gambar (.zip)
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    // Register Service Worker for PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => {
+          console.log('SW Registration failed: ', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
