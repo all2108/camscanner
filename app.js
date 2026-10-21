@@ -92,7 +92,7 @@ function startDocumentDetection() {
 
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-      cv.Canny(blurred, gray, 75, 200);
+      cv.Canny(blurred, gray, 50, 150);
 
       cv.findContours(gray, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
@@ -102,7 +102,7 @@ function startDocumentDetection() {
       for (let i = 0; i < contours.size(); ++i) {
         let cnt = contours.get(i);
         let area = cv.contourArea(cnt);
-        if (area > 4000 && area > maxArea) {
+        if (area > 3000 && area > maxArea) {
           maxArea = area;
           maxContour = cnt;
         }
@@ -161,7 +161,7 @@ function cancelAutoCapture() {
   }
 }
 
-// Capture Frame dengan Auto-Crop & Penghilang Bayangan Gelap
+// Capture Frame dengan Auto-Crop Stabil & Perbaikan Bayangan Lembut
 captureBtn.addEventListener('click', captureFrame);
 
 function captureFrame() {
@@ -177,14 +177,15 @@ function captureFrame() {
     let src = cv.imread(rawCanvas);
     let gray = new cv.Mat();
     let blurred = new cv.Mat();
-    let thresh = new cv.Mat();
+    let edges = new cv.Mat();
     let contours = new cv.MatVector();
     let hierarchy = new cv.Mat();
 
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
-    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.Canny(blurred, edges, 50, 150);
+
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     let maxArea = 0;
     let bestRect = null;
@@ -194,32 +195,40 @@ function captureFrame() {
       let area = cv.contourArea(cnt);
       let rect = cv.boundingRect(cnt);
       
-      if (area > (src.cols * src.rows * 0.1) && area > maxArea) {
+      // Validasi ukuran kotak dokumen agar masuk akal (minimal 15% dari luas layar)
+      if (area > (src.cols * src.rows * 0.15) && area > maxArea) {
         maxArea = area;
         bestRect = rect;
       }
     }
 
-    if (bestRect && bestRect.width > 80 && bestRect.height > 80) {
-      let croppedMat = src.roi(bestRect);
+    if (bestRect && bestRect.width > 100 && bestRect.height > 100) {
+      // Tambahkan margin kecil (padding) agar pinggiran kertas tidak terpotong pas
+      let x = Math.max(0, bestRect.x - 10);
+      let y = Math.max(0, bestRect.y - 10);
+      let w = Math.min(src.cols - x, bestRect.width + 20);
+      let h = Math.min(src.rows - y, bestRect.height + 20);
+      let paddedRect = new cv.Rect(x, y, w, h);
+
+      let croppedMat = src.roi(paddedRect);
       originalCanvas = document.createElement('canvas');
-      originalCanvas.width = bestRect.width;
-      originalCanvas.height = bestRect.height;
+      originalCanvas.width = w;
+      originalCanvas.height = h;
       cv.imshow(originalCanvas, croppedMat);
       croppedMat.delete();
     } else {
       originalCanvas = rawCanvas;
     }
 
-    src.delete(); gray.delete(); blurred.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+    src.delete(); gray.delete(); blurred.delete(); edges.delete(); contours.delete(); hierarchy.delete();
   } catch (err) {
     console.log("Auto-crop fallback:", err);
     originalCanvas = rawCanvas;
   }
 
-  // Set default slider netral
-  document.getElementById('brightnessSlider').value = 0;
-  document.getElementById('contrastSlider').value = 0;
+  // Set nilai slider standar yang seimbang
+  document.getElementById('brightnessSlider').value = 10;
+  document.getElementById('contrastSlider').value = 15;
 
   currentRotation = 0;
   applyImageFilters();
@@ -242,19 +251,18 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
     ctx.drawImage(img, 0, 0);
 
     originalCanvas = canvas;
-    document.getElementById('brightnessSlider').value = 0;
-    document.getElementById('contrastSlider').value = 0;
+    document.getElementById('brightnessSlider').value = 10;
+    document.getElementById('contrastSlider').value = 15;
     currentRotation = 0;
     applyImageFilters();
     
-    editorCard.classList.add('hidden'); // placeholder
     editorCard.classList.remove('hidden');
     editorCard.scrollIntoView({ behavior: 'smooth' });
   };
   img.src = URL.createObjectURL(file);
 });
 
-// Image Filters & Shadow Removal (Menghilangkan Bayangan Sisi Gelap)
+// Image Filters & Balanced Shadow Correction
 function applyImageFilters() {
   if (!originalCanvas) return;
 
@@ -278,48 +286,33 @@ function applyImageFilters() {
       if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
     }
 
-    // Filter Khusus Penghilang Bayangan / Adaptive Lighting (Mengatasi sisi kanan yang hitam)
-    if (activeFilter === 'magic' || activeFilter === 'adaptive') {
+    // Filter Perbaikan Pencahayaan Lembut (Tidak bikin putih total)
+    if (activeFilter === 'magic') {
+      // Magic Color: Tingkatkan kontras dan kecerahan secara proporsional
+      mat.convertTo(mat, -1, 1.25, 15);
+    } else if (activeFilter === 'adaptive') {
+      // Hapus Bayangan dengan blend lembut
       let gray = new cv.Mat();
       let bg = new cv.Mat();
-      let normalized = new cv.Mat();
-      let channels = new cv.MatVector();
+      let diff = new cv.Mat();
+      
+      cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, bg, new cv.Size(31, 31), 0);
+      
+      // Hitung selisih untuk meratakan bayangan tanpa memutihkan seluruh gambar
+      cv.subtract(bg, gray, diff);
+      cv.add(gray, diff, gray);
+      cv.cvtColor(gray, mat, cv.COLOR_GRAY2RGBA);
 
-      // Pisahkan channel warna agar warna kertas tetap terjaga
-      cv.split(mat, channels);
-      
-      for (let i = 0; i < 3; i++) {
-        let ch = channels.get(i);
-        // Buat background estimasi pencahayaan dengan blur sangat besar (menghilangkan bayangan lokal)
-        cv.GaussianBlur(ch, bg, new cv.Size(51, 51), 0);
-        
-        // Bagi channel asli dengan background untuk meratakan cahaya secara sempurna (Flat-field correction)
-        ch.convertTo(ch, cv.CV_32F);
-        bg.convertTo(bg, cv.CV_32F);
-        
-        // Rumus pemerataan: (ch / (bg + 15)) * 255
-        cv.divide(ch, bg, normalized, 255.0, cv.CV_32F);
-        normalized.convertTo(ch, cv.CV_8UC1);
-        
-        channels.set(i, ch);
-      }
-      
-      cv.merge(channels, mat);
-      
-      gray.delete(); bg.delete(); normalized.delete(); channels.delete();
-
-      if (activeFilter === 'bw') {
-        cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-        cv.threshold(mat, mat, 160, 255, cv.THRESH_BINARY);
-      }
+      gray.delete(); bg.delete(); diff.delete();
     } else if (activeFilter === 'bw') {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-      cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY);
+      cv.threshold(mat, mat, 140, 255, cv.THRESH_BINARY);
     } else if (activeFilter === 'gray') {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
     }
 
-    // Penyesuaian manual tambahan dari slider
+    // Penyesuaian manual dari slider
     if (userBrightness !== 0 || userContrast !== 0) {
       let alpha = (userContrast + 100) / 100;
       let beta = userBrightness;
@@ -445,7 +438,7 @@ document.getElementById('exportPdfBtn').addEventListener('click', () => {
 });
 
 document.getElementById('exportTxtBtn').addEventListener('click', () => {
-  const text = document.getElementById('ocrOutput').value;
+  const text = document.getElementById('ocrOutput'].value;
   if (!text) return alert("Jalankan OCR terlebih dahulu untuk mengekstrak teks!");
   
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
