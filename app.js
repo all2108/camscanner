@@ -7,7 +7,7 @@ let originalCanvas = null;
 let currentRotation = 0;
 let autoCaptureTimer = null;
 let stableDetectionCount = 0;
-let isProcessingFrame = false; // Flag untuk cegah tumpukan memori
+let isProcessingFrame = false;
 let lastFrameTime = 0;
 
 // DOM Elements
@@ -29,7 +29,7 @@ function onOpenCvReady() {
   startCamera();
 }
 
-// Start Camera Stream (Resolusi dioptimalkan untuk HP)
+// Start Camera Stream (Resolusi disesuaikan agar aman di HP)
 async function startCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
@@ -60,7 +60,7 @@ document.getElementById('toggleCameraBtn').addEventListener('click', () => {
   startCamera();
 });
 
-// Document Detection Loop via OpenCV (Dioptimalkan agar RAM tidak jebol)
+// Document Detection Loop (Dioptimalkan agar tidak crash di Android)
 function startDocumentDetection() {
   const ctx = overlayCanvas.getContext('2d');
   
@@ -70,8 +70,7 @@ function startDocumentDetection() {
       return;
     }
 
-    // Batasi deteksi maksimal 8 frame per detik (tiap 120ms) agar RAM HP tidak overload
-    if (timestamp - lastFrameTime < 120 || isProcessingFrame) {
+    if (timestamp - lastFrameTime < 150 || isProcessingFrame) {
       requestAnimationFrame(processFrame);
       return;
     }
@@ -124,7 +123,6 @@ function startDocumentDetection() {
     } catch (e) {
       console.log("Error OpenCV:", e);
     } finally {
-      // WAJIB: Wajib menghapus matriks dari memori RAM
       if (src) src.delete();
       if (gray) gray.delete();
       if (blurred) blurred.delete();
@@ -163,19 +161,73 @@ function cancelAutoCapture() {
   }
 }
 
-// Capture Frame to Editor
+// Capture Frame dengan Fitur Auto-Crop & Auto Kecerahan
 captureBtn.addEventListener('click', captureFrame);
 
 function captureFrame() {
   cancelAutoCapture();
   
-  const canvas = document.createElement('canvas');
-  canvas.width = videoFeed.videoWidth || 640;
-  canvas.height = videoFeed.videoHeight || 480;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(videoFeed, 0, 0);
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = videoFeed.videoWidth || 640;
+  rawCanvas.height = videoFeed.videoHeight || 480;
+  const rawCtx = rawCanvas.getContext('2d');
+  rawCtx.drawImage(videoFeed, 0, 0);
 
-  originalCanvas = canvas;
+  // Proses Auto-Crop & Auto Enhancement berbasis OpenCV
+  try {
+    let src = cv.imread(rawCanvas);
+    let gray = new cv.Mat();
+    let blurred = new cv.Mat();
+    let thresh = new cv.Mat();
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
+    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let maxArea = 0;
+    let bestRect = null;
+
+    for (let i = 0; i < contours.size(); ++i) {
+      let cnt = contours.get(i);
+      let area = cv.contourArea(cnt);
+      let rect = cv.boundingRect(cnt);
+      
+      // Cari kontur terbesar yang menyerupai dokumen
+      if (area > (src.cols * src.rows * 0.2) && area > maxArea) {
+        maxArea = area;
+        bestRect = rect;
+      }
+    }
+
+    // Jika area dokumen terdeteksi, lakukan Auto-Crop
+    if (bestRect && bestRect.width > 100 && bestRect.height > 100) {
+      let dsize = new cv.Size(bestRect.width, bestRect.height);
+      let croppedMat = src.roi(bestRect);
+      
+      originalCanvas = document.createElement('canvas');
+      originalCanvas.width = bestRect.width;
+      originalCanvas.height = bestRect.height;
+      cv.imshow(originalCanvas, croppedMat);
+      
+      croppedMat.delete();
+    } else {
+      // Jika tidak ada kontur spesifik, gunakan gambar penuh
+      originalCanvas = rawCanvas;
+    }
+
+    src.delete(); gray.delete(); blurred.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+  } catch (err) {
+    console.log("Auto-crop fallback:", err);
+    originalCanvas = rawCanvas;
+  }
+
+  // Set default slider kecerahan otomatis agak naik sedikit agar langsung terang
+  document.getElementById('brightnessSlider').value = 15;
+  document.getElementById('contrastSlider').value = 10;
+
   currentRotation = 0;
   applyImageFilters();
   
@@ -197,6 +249,8 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
     ctx.drawImage(img, 0, 0);
 
     originalCanvas = canvas;
+    document.getElementById('brightnessSlider').value = 15;
+    document.getElementById('contrastSlider').value = 10;
     currentRotation = 0;
     applyImageFilters();
     
@@ -206,7 +260,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   img.src = URL.createObjectURL(file);
 });
 
-// Image Filters Processing
+// Image Filters & Auto Brightness Processing
 function applyImageFilters() {
   if (!originalCanvas) return;
 
@@ -240,7 +294,7 @@ function applyImageFilters() {
     } else if (activeFilter === 'gray') {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
     } else if (activeFilter === 'magic') {
-      cv.convertScaleAbs(mat, mat, 1.2, 10);
+      cv.convertScaleAbs(mat, mat, 1.3, 15); // Auto enhancement lebih cerah
     }
 
     // Brightness & Contrast Adjustment
