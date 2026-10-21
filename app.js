@@ -438,7 +438,7 @@ document.getElementById('exportPdfBtn').addEventListener('click', () => {
 });
 
 document.getElementById('exportTxtBtn').addEventListener('click', () => {
-  const text = document.getElementById('ocrOutput'].value;
+  const text = document.getElementById('ocrOutput').value;
   if (!text) return alert("Jalankan OCR terlebih dahulu untuk mengekstrak teks!");
   
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
