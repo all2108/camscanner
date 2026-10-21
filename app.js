@@ -7,6 +7,8 @@ let originalCanvas = null;
 let currentRotation = 0;
 let autoCaptureTimer = null;
 let stableDetectionCount = 0;
+let isProcessingFrame = false; // Flag untuk cegah tumpukan memori
+let lastFrameTime = 0;
 
 // DOM Elements
 const videoFeed = document.getElementById('videoFeed');
@@ -27,7 +29,7 @@ function onOpenCvReady() {
   startCamera();
 }
 
-// Start Camera Stream
+// Start Camera Stream (Resolusi dioptimalkan untuk HP)
 async function startCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
@@ -35,7 +37,11 @@ async function startCamera() {
 
   try {
     currentStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: useFacingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { 
+        facingMode: useFacingMode, 
+        width: { ideal: 640 }, 
+        height: { ideal: 480 } 
+      },
       audio: false
     });
     videoFeed.srcObject = currentStream;
@@ -54,25 +60,36 @@ document.getElementById('toggleCameraBtn').addEventListener('click', () => {
   startCamera();
 });
 
-// Document Detection Loop via OpenCV
+// Document Detection Loop via OpenCV (Dioptimalkan agar RAM tidak jebol)
 function startDocumentDetection() {
   const ctx = overlayCanvas.getContext('2d');
   
-  function processFrame() {
+  function processFrame(timestamp) {
     if (!isCvReady || videoFeed.paused || videoFeed.ended) {
       requestAnimationFrame(processFrame);
       return;
     }
 
-    overlayCanvas.width = videoFeed.videoWidth;
-    overlayCanvas.height = videoFeed.videoHeight;
+    // Batasi deteksi maksimal 8 frame per detik (tiap 120ms) agar RAM HP tidak overload
+    if (timestamp - lastFrameTime < 120 || isProcessingFrame) {
+      requestAnimationFrame(processFrame);
+      return;
+    }
+
+    lastFrameTime = timestamp;
+    isProcessingFrame = true;
+
+    overlayCanvas.width = videoFeed.videoWidth || 640;
+    overlayCanvas.height = videoFeed.videoHeight || 480;
+
+    let src = null, gray = null, blurred = null, contours = null, hierarchy = null;
 
     try {
-      let src = cv.imread(videoFeed);
-      let gray = new cv.Mat();
-      let blurred = new cv.Mat();
-      let contours = new cv.MatVector();
-      let hierarchy = new cv.Mat();
+      src = cv.imread(videoFeed);
+      gray = new cv.Mat();
+      blurred = new cv.Mat();
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
 
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
@@ -86,7 +103,7 @@ function startDocumentDetection() {
       for (let i = 0; i < contours.size(); ++i) {
         let cnt = contours.get(i);
         let area = cv.contourArea(cnt);
-        if (area > 10000 && area > maxArea) {
+        if (area > 5000 && area > maxArea) {
           maxArea = area;
           maxContour = cnt;
         }
@@ -96,7 +113,7 @@ function startDocumentDetection() {
 
       if (maxContour) {
         stableDetectionCount++;
-        if (stableDetectionCount > 15 && !autoCaptureTimer) {
+        if (stableDetectionCount > 8 && !autoCaptureTimer) {
           triggerAutoCapture();
         }
       } else {
@@ -104,9 +121,16 @@ function startDocumentDetection() {
         cancelAutoCapture();
       }
 
-      src.delete(); gray.delete(); blurred.delete(); contours.delete(); hierarchy.delete();
     } catch (e) {
-      console.log(e);
+      console.log("Error OpenCV:", e);
+    } finally {
+      // WAJIB: Wajib menghapus matriks dari memori RAM
+      if (src) src.delete();
+      if (gray) gray.delete();
+      if (blurred) blurred.delete();
+      if (contours) contours.delete();
+      if (hierarchy) hierarchy.delete();
+      isProcessingFrame = false;
     }
 
     requestAnimationFrame(processFrame);
@@ -146,8 +170,8 @@ function captureFrame() {
   cancelAutoCapture();
   
   const canvas = document.createElement('canvas');
-  canvas.width = videoFeed.videoWidth;
-  canvas.height = videoFeed.videoHeight;
+  canvas.width = videoFeed.videoWidth || 640;
+  canvas.height = videoFeed.videoHeight || 480;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(videoFeed, 0, 0);
 
@@ -195,37 +219,43 @@ function applyImageFilters() {
   editorCanvas.width = originalCanvas.width;
   editorCanvas.height = originalCanvas.height;
 
-  let mat = cv.imread(originalCanvas);
+  let mat = null;
+  try {
+    mat = cv.imread(originalCanvas);
 
-  // Rotate
-  if (currentRotation !== 0) {
-    if (currentRotation === 90) cv.rotate(mat, mat, cv.ROTATE_90_CLOCKWISE);
-    if (currentRotation === 180) cv.rotate(mat, mat, cv.ROTATE_180);
-    if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
+    // Rotate
+    if (currentRotation !== 0) {
+      if (currentRotation === 90) cv.rotate(mat, mat, cv.ROTATE_90_CLOCKWISE);
+      if (currentRotation === 180) cv.rotate(mat, mat, cv.ROTATE_180);
+      if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
+    }
+
+    // Filters
+    if (activeFilter === 'bw') {
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+      cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY);
+    } else if (activeFilter === 'adaptive') {
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+      cv.adaptiveThreshold(mat, mat, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
+    } else if (activeFilter === 'gray') {
+      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+    } else if (activeFilter === 'magic') {
+      cv.convertScaleAbs(mat, mat, 1.2, 10);
+    }
+
+    // Brightness & Contrast Adjustment
+    if (brightness !== 0 || contrast !== 0) {
+      let alpha = (contrast + 100) / 100;
+      let beta = brightness;
+      mat.convertTo(mat, -1, alpha, beta);
+    }
+
+    cv.imshow(editorCanvas, mat);
+  } catch (err) {
+    console.log("Filter error:", err);
+  } finally {
+    if (mat) mat.delete();
   }
-
-  // Filters
-  if (activeFilter === 'bw') {
-    cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-    cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY);
-  } else if (activeFilter === 'adaptive') {
-    cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-    cv.adaptiveThreshold(mat, mat, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
-  } else if (activeFilter === 'gray') {
-    cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-  } else if (activeFilter === 'magic') {
-    cv.convertScaleAbs(mat, mat, 1.2, 10);
-  }
-
-  // Brightness & Contrast Adjustment
-  if (brightness !== 0 || contrast !== 0) {
-    let alpha = (contrast + 100) / 100;
-    let beta = brightness;
-    mat.convertTo(mat, -1, alpha, beta);
-  }
-
-  cv.imshow(editorCanvas, mat);
-  mat.delete();
 
   // Watermark
   if (watermarkText) {
