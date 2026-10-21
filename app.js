@@ -107,7 +107,6 @@ function startDocumentDetection() {
           let approx = new cv.Mat();
           cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
           
-          // Jika mendekati 4 sudut (persegi/dokumen)
           if (approx.rows === 4 && area > maxArea) {
             maxArea = area;
             foundDoc = true;
@@ -170,7 +169,7 @@ function cancelAutoCapture() {
   }
 }
 
-// Capture Frame dengan Auto-Crop 4 Sudut Presisi
+// Capture Frame dengan Auto-Crop
 captureBtn.addEventListener('click', captureFrame);
 
 function captureFrame() {
@@ -232,7 +231,6 @@ function captureFrame() {
     originalCanvas = rawCanvas;
   }
 
-  // Set default slider pas untuk mode "Cerahkan"
   document.getElementById('brightnessSlider').value = 15;
   document.getElementById('contrastSlider').value = 20;
 
@@ -268,7 +266,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   img.src = URL.createObjectURL(file);
 });
 
-// Image Filters & Magic Color (Mode "Cerahkan" ala CamScanner)
+// Image Filters & Magic Color
 function applyImageFilters() {
   if (!originalCanvas) return;
 
@@ -285,19 +283,15 @@ function applyImageFilters() {
   try {
     mat = cv.imread(originalCanvas);
 
-    // Rotate
     if (currentRotation !== 0) {
       if (currentRotation === 90) cv.rotate(mat, mat, cv.ROTATE_90_CLOCKWISE);
       if (currentRotation === 180) cv.rotate(mat, mat, cv.ROTATE_180);
       if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
     }
 
-    // Filter Logic Menyerupai Mode "Cerahkan / Magic Color" CamScanner
     if (activeFilter === 'magic') {
-      // Tingkatkan kontras dan kecerahan secara dinamis agar warna kertas (misal hijau/kuning) tetap hidup dan cerah
       mat.convertTo(mat, -1, 1.3, 25);
     } else if (activeFilter === 'adaptive') {
-      // Hapus Bayangan merata tanpa membuat gambar jadi putih pucat
       let gray = new cv.Mat();
       let bg = new cv.Mat();
       let diff = new cv.Mat();
@@ -316,7 +310,6 @@ function applyImageFilters() {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
     }
 
-    // Penyesuaian manual dari slider
     if (userBrightness !== 0 || userContrast !== 0) {
       let alpha = (userContrast + 100) / 100;
       let beta = userBrightness;
@@ -330,7 +323,6 @@ function applyImageFilters() {
     if (mat) mat.delete();
   }
 
-  // Watermark
   if (watermarkText) {
     ctx.font = "bold 36px Arial";
     ctx.fillStyle = "rgba(239, 68, 68, 0.4)";
@@ -388,7 +380,7 @@ document.getElementById('runOcrBtn').addEventListener('click', async () => {
 document.getElementById('copyOcrBtn').addEventListener('click', () => {
   const ocrOutput = document.getElementById('ocrOutput');
   ocrOutput.select();
-  document.getElementById('ocrOutput').setSelectionRange(0, 99999);
+  ocrOutput.setSelectionRange(0, 99999);
   navigator.clipboard.writeText(ocrOutput.value);
   alert("Teks berhasil disalin!");
 });
@@ -426,7 +418,7 @@ window.removePage = function(index) {
 document.getElementById('clearQueueBtn').addEventListener('click', () => {
   capturedPages = [];
   updateQueueUI();
-};
+});
 
 // Exports
 document.getElementById('exportPdfBtn').addEventListener('click', () => {
