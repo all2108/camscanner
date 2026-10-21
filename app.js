@@ -29,7 +29,7 @@ function onOpenCvReady() {
   startCamera();
 }
 
-// Start Camera Stream
+// Start Camera Stream (Normal / Non-Mirror)
 async function startCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
@@ -60,7 +60,7 @@ document.getElementById('toggleCameraBtn').addEventListener('click', () => {
   startCamera();
 });
 
-// Document Detection Loop
+// Document Detection Loop (Mencari Kontur Dokumen)
 function startDocumentDetection() {
   const ctx = overlayCanvas.getContext('2d');
   
@@ -81,38 +81,46 @@ function startDocumentDetection() {
     overlayCanvas.width = videoFeed.videoWidth || 640;
     overlayCanvas.height = videoFeed.videoHeight || 480;
 
-    let src = null, gray = null, blurred = null, contours = null, hierarchy = null;
+    let src = null, gray = null, blurred = null, thresh = null, contours = null, hierarchy = null;
 
     try {
       src = cv.imread(videoFeed);
       gray = new cv.Mat();
       blurred = new cv.Mat();
+      thresh = new cv.Mat();
       contours = new cv.MatVector();
       hierarchy = new cv.Mat();
 
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-      cv.Canny(blurred, gray, 50, 150);
-
-      cv.findContours(gray, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
+      cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
       let maxArea = 0;
-      let maxContour = null;
+      let foundDoc = false;
 
       for (let i = 0; i < contours.size(); ++i) {
         let cnt = contours.get(i);
         let area = cv.contourArea(cnt);
-        if (area > 3000 && area > maxArea) {
-          maxArea = area;
-          maxContour = cnt;
+        if (area > (src.cols * src.rows * 0.15)) {
+          let peri = cv.arcLength(cnt, true);
+          let approx = new cv.Mat();
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+          
+          // Jika mendekati 4 sudut (persegi/dokumen)
+          if (approx.rows === 4 && area > maxArea) {
+            maxArea = area;
+            foundDoc = true;
+          }
+          approx.delete();
         }
       }
 
       ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-      if (maxContour) {
+      if (foundDoc) {
         stableDetectionCount++;
-        if (stableDetectionCount > 8 && !autoCaptureTimer) {
+        if (stableDetectionCount > 6 && !autoCaptureTimer) {
           triggerAutoCapture();
         }
       } else {
@@ -126,6 +134,7 @@ function startDocumentDetection() {
       if (src) src.delete();
       if (gray) gray.delete();
       if (blurred) blurred.delete();
+      if (thresh) thresh.delete();
       if (contours) contours.delete();
       if (hierarchy) hierarchy.delete();
       isProcessingFrame = false;
@@ -161,7 +170,7 @@ function cancelAutoCapture() {
   }
 }
 
-// Capture Frame dengan Auto-Crop Stabil & Perbaikan Bayangan Lembut
+// Capture Frame dengan Auto-Crop 4 Sudut Presisi
 captureBtn.addEventListener('click', captureFrame);
 
 function captureFrame() {
@@ -177,15 +186,14 @@ function captureFrame() {
     let src = cv.imread(rawCanvas);
     let gray = new cv.Mat();
     let blurred = new cv.Mat();
-    let edges = new cv.Mat();
+    let thresh = new cv.Mat();
     let contours = new cv.MatVector();
     let hierarchy = new cv.Mat();
 
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    cv.Canny(blurred, edges, 50, 150);
-
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
+    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     let maxArea = 0;
     let bestRect = null;
@@ -195,15 +203,13 @@ function captureFrame() {
       let area = cv.contourArea(cnt);
       let rect = cv.boundingRect(cnt);
       
-      // Validasi ukuran kotak dokumen agar masuk akal (minimal 15% dari luas layar)
-      if (area > (src.cols * src.rows * 0.15) && area > maxArea) {
+      if (area > (src.cols * src.rows * 0.1) && area > maxArea) {
         maxArea = area;
         bestRect = rect;
       }
     }
 
-    if (bestRect && bestRect.width > 100 && bestRect.height > 100) {
-      // Tambahkan margin kecil (padding) agar pinggiran kertas tidak terpotong pas
+    if (bestRect && bestRect.width > 50 && bestRect.height > 50) {
       let x = Math.max(0, bestRect.x - 10);
       let y = Math.max(0, bestRect.y - 10);
       let w = Math.min(src.cols - x, bestRect.width + 20);
@@ -220,15 +226,15 @@ function captureFrame() {
       originalCanvas = rawCanvas;
     }
 
-    src.delete(); gray.delete(); blurred.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+    src.delete(); gray.delete(); blurred.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
   } catch (err) {
     console.log("Auto-crop fallback:", err);
     originalCanvas = rawCanvas;
   }
 
-  // Set nilai slider standar yang seimbang
-  document.getElementById('brightnessSlider').value = 10;
-  document.getElementById('contrastSlider').value = 15;
+  // Set default slider pas untuk mode "Cerahkan"
+  document.getElementById('brightnessSlider').value = 15;
+  document.getElementById('contrastSlider').value = 20;
 
   currentRotation = 0;
   applyImageFilters();
@@ -251,8 +257,8 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
     ctx.drawImage(img, 0, 0);
 
     originalCanvas = canvas;
-    document.getElementById('brightnessSlider').value = 10;
-    document.getElementById('contrastSlider').value = 15;
+    document.getElementById('brightnessSlider').value = 15;
+    document.getElementById('contrastSlider').value = 20;
     currentRotation = 0;
     applyImageFilters();
     
@@ -262,7 +268,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   img.src = URL.createObjectURL(file);
 });
 
-// Image Filters & Balanced Shadow Correction
+// Image Filters & Magic Color (Mode "Cerahkan" ala CamScanner)
 function applyImageFilters() {
   if (!originalCanvas) return;
 
@@ -286,20 +292,18 @@ function applyImageFilters() {
       if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
     }
 
-    // Filter Perbaikan Pencahayaan Lembut (Tidak bikin putih total)
+    // Filter Logic Menyerupai Mode "Cerahkan / Magic Color" CamScanner
     if (activeFilter === 'magic') {
-      // Magic Color: Tingkatkan kontras dan kecerahan secara proporsional
-      mat.convertTo(mat, -1, 1.25, 15);
+      // Tingkatkan kontras dan kecerahan secara dinamis agar warna kertas (misal hijau/kuning) tetap hidup dan cerah
+      mat.convertTo(mat, -1, 1.3, 25);
     } else if (activeFilter === 'adaptive') {
-      // Hapus Bayangan dengan blend lembut
+      // Hapus Bayangan merata tanpa membuat gambar jadi putih pucat
       let gray = new cv.Mat();
       let bg = new cv.Mat();
       let diff = new cv.Mat();
       
       cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
-      cv.GaussianBlur(gray, bg, new cv.Size(31, 31), 0);
-      
-      // Hitung selisih untuk meratakan bayangan tanpa memutihkan seluruh gambar
+      cv.GaussianBlur(gray, bg, new cv.Size(45, 45), 0);
       cv.subtract(bg, gray, diff);
       cv.add(gray, diff, gray);
       cv.cvtColor(gray, mat, cv.COLOR_GRAY2RGBA);
@@ -384,7 +388,8 @@ document.getElementById('runOcrBtn').addEventListener('click', async () => {
 document.getElementById('copyOcrBtn').addEventListener('click', () => {
   const ocrOutput = document.getElementById('ocrOutput');
   ocrOutput.select();
-  document.execCommand('copy');
+  document.getElementById('ocrOutput').setSelectionRange(0, 99999);
+  navigator.clipboard.writeText(ocrOutput.value);
   alert("Teks berhasil disalin!");
 });
 
@@ -421,7 +426,7 @@ window.removePage = function(index) {
 document.getElementById('clearQueueBtn').addEventListener('click', () => {
   capturedPages = [];
   updateQueueUI();
-});
+};
 
 // Exports
 document.getElementById('exportPdfBtn').addEventListener('click', () => {
