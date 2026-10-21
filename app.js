@@ -29,7 +29,7 @@ function onOpenCvReady() {
   startCamera();
 }
 
-// Start Camera Stream (Resolusi disesuaikan agar aman di HP)
+// Start Camera Stream
 async function startCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
@@ -60,7 +60,7 @@ document.getElementById('toggleCameraBtn').addEventListener('click', () => {
   startCamera();
 });
 
-// Document Detection Loop (Dioptimalkan agar tidak crash di Android)
+// Document Detection Loop
 function startDocumentDetection() {
   const ctx = overlayCanvas.getContext('2d');
   
@@ -102,7 +102,7 @@ function startDocumentDetection() {
       for (let i = 0; i < contours.size(); ++i) {
         let cnt = contours.get(i);
         let area = cv.contourArea(cnt);
-        if (area > 5000 && area > maxArea) {
+        if (area > 4000 && area > maxArea) {
           maxArea = area;
           maxContour = cnt;
         }
@@ -161,7 +161,7 @@ function cancelAutoCapture() {
   }
 }
 
-// Capture Frame dengan Fitur Auto-Crop & Auto Kecerahan
+// Capture Frame dengan Auto-Crop & Penghilang Bayangan Gelap
 captureBtn.addEventListener('click', captureFrame);
 
 function captureFrame() {
@@ -173,7 +173,6 @@ function captureFrame() {
   const rawCtx = rawCanvas.getContext('2d');
   rawCtx.drawImage(videoFeed, 0, 0);
 
-  // Proses Auto-Crop & Auto Enhancement berbasis OpenCV
   try {
     let src = cv.imread(rawCanvas);
     let gray = new cv.Mat();
@@ -195,26 +194,20 @@ function captureFrame() {
       let area = cv.contourArea(cnt);
       let rect = cv.boundingRect(cnt);
       
-      // Cari kontur terbesar yang menyerupai dokumen
-      if (area > (src.cols * src.rows * 0.2) && area > maxArea) {
+      if (area > (src.cols * src.rows * 0.1) && area > maxArea) {
         maxArea = area;
         bestRect = rect;
       }
     }
 
-    // Jika area dokumen terdeteksi, lakukan Auto-Crop
-    if (bestRect && bestRect.width > 100 && bestRect.height > 100) {
-      let dsize = new cv.Size(bestRect.width, bestRect.height);
+    if (bestRect && bestRect.width > 80 && bestRect.height > 80) {
       let croppedMat = src.roi(bestRect);
-      
       originalCanvas = document.createElement('canvas');
       originalCanvas.width = bestRect.width;
       originalCanvas.height = bestRect.height;
       cv.imshow(originalCanvas, croppedMat);
-      
       croppedMat.delete();
     } else {
-      // Jika tidak ada kontur spesifik, gunakan gambar penuh
       originalCanvas = rawCanvas;
     }
 
@@ -224,9 +217,9 @@ function captureFrame() {
     originalCanvas = rawCanvas;
   }
 
-  // Set default slider kecerahan otomatis agak naik sedikit agar langsung terang
-  document.getElementById('brightnessSlider').value = 15;
-  document.getElementById('contrastSlider').value = 10;
+  // Set default slider netral
+  document.getElementById('brightnessSlider').value = 0;
+  document.getElementById('contrastSlider').value = 0;
 
   currentRotation = 0;
   applyImageFilters();
@@ -249,24 +242,25 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
     ctx.drawImage(img, 0, 0);
 
     originalCanvas = canvas;
-    document.getElementById('brightnessSlider').value = 15;
-    document.getElementById('contrastSlider').value = 10;
+    document.getElementById('brightnessSlider').value = 0;
+    document.getElementById('contrastSlider').value = 0;
     currentRotation = 0;
     applyImageFilters();
     
+    editorCard.classList.add('hidden'); // placeholder
     editorCard.classList.remove('hidden');
     editorCard.scrollIntoView({ behavior: 'smooth' });
   };
   img.src = URL.createObjectURL(file);
 });
 
-// Image Filters & Auto Brightness Processing
+// Image Filters & Shadow Removal (Menghilangkan Bayangan Sisi Gelap)
 function applyImageFilters() {
   if (!originalCanvas) return;
 
   const activeFilter = document.querySelector('.filter-chip.active').dataset.filter;
-  const brightness = parseInt(document.getElementById('brightnessSlider').value);
-  const contrast = parseInt(document.getElementById('contrastSlider').value);
+  const userBrightness = parseInt(document.getElementById('brightnessSlider').value);
+  const userContrast = parseInt(document.getElementById('contrastSlider').value);
   const watermarkText = document.getElementById('watermarkText').value;
 
   const ctx = editorCanvas.getContext('2d');
@@ -284,23 +278,51 @@ function applyImageFilters() {
       if (currentRotation === 270) cv.rotate(mat, mat, cv.ROTATE_90_COUNTERCLOCKWISE);
     }
 
-    // Filters
-    if (activeFilter === 'bw') {
+    // Filter Khusus Penghilang Bayangan / Adaptive Lighting (Mengatasi sisi kanan yang hitam)
+    if (activeFilter === 'magic' || activeFilter === 'adaptive') {
+      let gray = new cv.Mat();
+      let bg = new cv.Mat();
+      let normalized = new cv.Mat();
+      let channels = new cv.MatVector();
+
+      // Pisahkan channel warna agar warna kertas tetap terjaga
+      cv.split(mat, channels);
+      
+      for (let i = 0; i < 3; i++) {
+        let ch = channels.get(i);
+        // Buat background estimasi pencahayaan dengan blur sangat besar (menghilangkan bayangan lokal)
+        cv.GaussianBlur(ch, bg, new cv.Size(51, 51), 0);
+        
+        // Bagi channel asli dengan background untuk meratakan cahaya secara sempurna (Flat-field correction)
+        ch.convertTo(ch, cv.CV_32F);
+        bg.convertTo(bg, cv.CV_32F);
+        
+        // Rumus pemerataan: (ch / (bg + 15)) * 255
+        cv.divide(ch, bg, normalized, 255.0, cv.CV_32F);
+        normalized.convertTo(ch, cv.CV_8UC1);
+        
+        channels.set(i, ch);
+      }
+      
+      cv.merge(channels, mat);
+      
+      gray.delete(); bg.delete(); normalized.delete(); channels.delete();
+
+      if (activeFilter === 'bw') {
+        cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
+        cv.threshold(mat, mat, 160, 255, cv.THRESH_BINARY);
+      }
+    } else if (activeFilter === 'bw') {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
       cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY);
-    } else if (activeFilter === 'adaptive') {
-      cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-      cv.adaptiveThreshold(mat, mat, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
     } else if (activeFilter === 'gray') {
       cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-    } else if (activeFilter === 'magic') {
-      cv.convertScaleAbs(mat, mat, 1.3, 15); // Auto enhancement lebih cerah
     }
 
-    // Brightness & Contrast Adjustment
-    if (brightness !== 0 || contrast !== 0) {
-      let alpha = (contrast + 100) / 100;
-      let beta = brightness;
+    // Penyesuaian manual tambahan dari slider
+    if (userBrightness !== 0 || userContrast !== 0) {
+      let alpha = (userContrast + 100) / 100;
+      let beta = userBrightness;
       mat.convertTo(mat, -1, alpha, beta);
     }
 
